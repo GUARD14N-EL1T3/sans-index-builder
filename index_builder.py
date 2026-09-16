@@ -28,7 +28,6 @@ DEFAULT_OUTPUT = "index.csv"
 DEFAULT_STRIP_MAX_LEN = 10
 DEFAULT_STRIP_MIN_LEN = 3
 DEFAULT_STRIP_THRESHOLD = 0.5
-DEFAULT_TERMS = "terms.txt"
 DEFAULT_WORDLIST = "wordlists"
 DEFAULT_ZIPF = 3.6
 
@@ -274,7 +273,7 @@ def build_index(term_index, book, min_occurrences=2):
     rows = []
     for term, page_nums in term_index.items():
         if len(page_nums) >= min_occurrences:
-            index = ", ".join(str(p) for p in sorted(page_nums))
+            index = " ".join(str(p) for p in sorted(page_nums))
             rows.append((term, book, index))
 
     log_msg("build_index", f"Built index with {len(rows)} terms")
@@ -336,8 +335,6 @@ def load_wordlists(wordlist):
 
 
 def get_ocr_cache(path, dir, confidence, dpi):
-    if not dir or not os.path.exists(dir):
-        return None
     cache_name = os.path.splitext(path)
     if not cache_name[1]:
         log_msg(
@@ -416,10 +413,11 @@ def ocr_pages(path, confidence, dpi, password=None):
 
 
 def get_pages(path, cache_dir, confidence, dpi, password=None):
-    cache_path = get_ocr_cache(path, cache_dir, confidence, dpi)
-    if cache_path and os.path.exists(cache_path):
-        log_msg("get_pages", f"Loading cached OCR text from '{cache_path}' ...")
-        return load_ocr_cache(cache_path)
+    if cache_dir and os.path.exists(cache_dir):
+        cache_path = get_ocr_cache(path, cache_dir, confidence, dpi)
+        if os.path.exists(cache_path):
+            log_msg("get_pages", f"Loading cached OCR text from '{cache_path}' ...")
+            return load_ocr_cache(cache_path)
     else:
         log_msg("get_pages", "No cache found or wanted")
 
@@ -431,14 +429,12 @@ def get_pages(path, cache_dir, confidence, dpi, password=None):
     )
 
     if cache_dir:
-        try:
-            if not os.path.exists(cache_dir):
-                log_msg("get_pages", f"Created '{cache_dir}' directory")
-                os.mkdir(cache_dir)
-            save_ocr_cache(cache_path, pages)
-            log_msg("get_pages", f"Cached OCR text to '{cache_path}'")
-        except OSError as e:
-            log_msg("get_pages", f"Error: {e}")
+        if not os.path.exists(cache_dir):
+            os.mkdir(cache_dir)
+            log_msg("get_pages", f"Created '{cache_dir}' directory")
+        cache_path = get_ocr_cache(path, cache_dir, confidence, dpi)
+        save_ocr_cache(cache_path, pages)
+        log_msg("get_pages", f"Cached OCR text to '{cache_path}'")
     else:
         log_msg("get_pages", "Skipping saving to cache")
 
@@ -724,7 +720,7 @@ def main():
             password=args.password,
             path=args.path,
         )
-    except ValueError as e:
+    except (OSError, ValueError) as e:
         log_msg("main", f"ERROR: {e}")
         sys.exit(1)
 
@@ -748,6 +744,7 @@ def main():
         args.output, "w" if args.overwrite else "a", encoding="utf-8"
     ) as f:
         writer = csv.writer(f)
+        writer.writerow(["Term", "Book", "Page"])
         writer.writerows(rows)
     log_msg("main", f"Wrote {len(rows)} lines to '{args.output}'")
 
