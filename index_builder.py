@@ -335,7 +335,8 @@ def load_wordlists(wordlist):
 
 
 def get_ocr_cache(path, dir, confidence, dpi):
-    cache_name = os.path.splitext(path)
+    file_name = os.path.basename(path)
+    cache_name = os.path.splitext(file_name)
     if not cache_name[1]:
         log_msg(
             "get_ocr_cache",
