@@ -1,0 +1,21 @@
+# Words that connect a multi-word phrase internally (e.g. "Chain of Custody",
+# "Rules of Engagement") - kept mid-phrase, never allowed to start or end one.
+of
+the
+and
+or
+in
+on
+for
+to
+by
+with
+as
+at
+from
+a
+an
+vs
+vs.
+via
+&
