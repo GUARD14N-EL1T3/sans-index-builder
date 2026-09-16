@@ -417,7 +417,9 @@ def get_pages(path, cache_dir, confidence, dpi, password=None):
     if cache_dir and os.path.exists(cache_dir):
         cache_path = get_ocr_cache(path, cache_dir, confidence, dpi)
         if os.path.exists(cache_path):
-            log_msg("get_pages", f"Loading cached OCR text from '{cache_path}' ...")
+            log_msg(
+                "get_pages", f"Loading cached OCR text from '{cache_path}' ..."
+            )
             return load_ocr_cache(cache_path)
     else:
         log_msg("get_pages", "No cache found or wanted")
@@ -741,13 +743,14 @@ def main():
 
     rows = build_index(terms_index, args.book, args.occurrences)
 
-    with open(
-        args.output, "w" if args.overwrite else "a", encoding="utf-8"
-    ) as f:
+    open_mode = "w" if args.overwrite else "a"
+    with open(args.output, open_mode, encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Term", "Book", "Page"])
+        if args.overwrite:
+            writer.writerow(["Term", "Book", "Page"])
         writer.writerows(rows)
-    log_msg("main", f"Wrote {len(rows)} lines to '{args.output}'")
+    action = "Wrote" if args.overwrite else "Appended"
+    log_msg("main", f"{action} to '{args.output}'")
 
 
 if __name__ == "__main__":
