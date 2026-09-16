@@ -47,6 +47,10 @@ options:
   --zipf ZIPF           Drops single common-English words scoring above the value on the Zipf frequency scale. Requires 'pip install wordfreq'; Does not take effect if not installed. Lower = stricter (drops more borderline words), higher = more permissive. (default: 3.6)
 ```
 
+## Credit
+
+Inspired by [SANS-Index](https://github.com/bkboltz/SANS-Index) built by bkboltz. Some functionality is derived from this project.
+
 ## Disclaimer
 
 Claude was used to make the initial draft of the script. Script was subsequently reviewed line-by-line and adjusted to make it more human-readable and fit my coding style.
