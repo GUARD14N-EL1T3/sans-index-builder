@@ -20,16 +20,17 @@ from wordfreq import zipf_frequency
 # -----------------------------------------------------------------------------
 
 
-DEFAULT_CACHE = "cache"
-DEFAULT_DPI = 300
-DEFAULT_OCCURRENCES = 2
+DEFAULT_DIR_BASE = "."
+DEFAULT_DIR_CACHE = "cache"
+DEFAULT_DIR_WORDLIST = "wordlists"
+DEFAULT_FILE_OUTPUT = "index.csv"
+DEFAULT_OCR_DPI = 300
 DEFAULT_OCR_CONFIDENCE = 40
-DEFAULT_OUTPUT = "index.csv"
-DEFAULT_STRIP_MAX_LEN = 10
-DEFAULT_STRIP_MIN_LEN = 3
+DEFAULT_STRIP_MAX_WORDS = 10
+DEFAULT_STRIP_MIN_WORDS = 3
 DEFAULT_STRIP_THRESHOLD = 0.5
-DEFAULT_WORDLIST = "wordlists"
-DEFAULT_ZIPF = 3.6
+DEFAULT_TERM_OCCURRENCES = 2
+DEFAULT_TERM_ZIPF = 3.6
 
 
 # -----------------------------------------------------------------------------
@@ -603,8 +604,16 @@ def main():
         type=int,
     )
     ap.add_argument(
+        "-b",
+        "--base",
+        default=DEFAULT_DIR_BASE,
+        dest="base",
+        help="Path to base directory. All relative paths use this base path",
+    )
+    ap.add_argument(
+        "-c",
         "--cache",
-        default=DEFAULT_CACHE,
+        default=DEFAULT_DIR_CACHE,
         dest="cache",
         help="Path to cache directory",
     )
@@ -617,13 +626,15 @@ def main():
         type=float,
     )
     ap.add_argument(
+        "-d",
         "--dpi",
-        default=DEFAULT_DPI,
+        default=DEFAULT_OCR_DPI,
         dest="dpi",
         help="Render DPI for OCR",
         type=int,
     )
     ap.add_argument(
+        "-e",
         "--exclude-terms",
         dest="exclude",
         help="Path to a file of terms/phrases to always exclude (one term / line), "
@@ -638,28 +649,30 @@ def main():
     )
     ap.add_argument(
         "--max-words",
-        default=DEFAULT_STRIP_MAX_LEN,
+        default=DEFAULT_STRIP_MAX_WORDS,
         dest="max_words",
         help="Maximum length of a repeating word-sequence to strip as header/footer",
         type=int,
     )
     ap.add_argument(
         "--min-words",
-        default=DEFAULT_STRIP_MIN_LEN,
+        default=DEFAULT_STRIP_MIN_WORDS,
         dest="min_words",
         help="Minimum length of a repeating word-sequence to strip as header/footer",
         type=int,
     )
     ap.add_argument(
+        "-n",
         "--occurrences",
-        default=DEFAULT_OCCURRENCES,
+        default=DEFAULT_TERM_OCCURRENCES,
         dest="occurrences",
         help="Minimum distinct pages on which a term must appear",
         type=int,
     )
     ap.add_argument(
+        "-o",
         "--output",
-        default=DEFAULT_OUTPUT,
+        default=DEFAULT_FILE_OUTPUT,
         dest="output",
         help="Output path for CSV file containing index",
     )
@@ -670,6 +683,7 @@ def main():
         help="Overwrite a potentially existing output file path",
     )
     ap.add_argument(
+        "-p",
         "--password",
         dest="password",
         help="Encrypted PDF password and can be set using the environment variable 'PDF_PASSWORD'",
@@ -682,15 +696,17 @@ def main():
         type=float,
     )
     ap.add_argument(
+        "-w",
         "--wordlist",
-        default=DEFAULT_WORDLIST,
+        default=DEFAULT_DIR_WORDLIST,
         dest="wordlist",
         help="Directory containing wordlist text files (one term / line). "
         "connectors.txt / forbidden_starters.txt / stopwords.txt",
     )
     ap.add_argument(
+        "-z",
         "--zipf",
-        default=DEFAULT_ZIPF,
+        default=DEFAULT_TERM_ZIPF,
         dest="zipf",
         help="Drops single common-English words scoring above the value on the Zipf frequency scale. "
         "Requires 'pip install wordfreq'; Does not take effect if not installed. "
