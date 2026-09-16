@@ -743,6 +743,11 @@ def main():
 
     rows = build_index(terms_index, args.book, args.occurrences)
 
+    if not args.overwrite and os.path.exists(args.output):
+        with open(args.output, "r", encoding="utf-8") as f:
+            if f.readline() != "Term,Book,Page\n":
+                log_msg("main", "WARNING: Row header is not what is expected")
+
     open_mode = "w" if args.overwrite else "a"
     with open(args.output, open_mode, encoding="utf-8") as f:
         writer = csv.writer(f)
