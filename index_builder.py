@@ -8,12 +8,17 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Iterable
+from typing import Any
 
 import pymupdf
 import pytesseract
 from PIL import Image
+from PIL.ImageFile import ImageFile
 from tqdm import tqdm
 from wordfreq import zipf_frequency
+
+DEBUG = True
 
 # -----------------------------------------------------------------------------
 # Default argument option values
@@ -23,12 +28,17 @@ from wordfreq import zipf_frequency
 DEFAULT_DIR_BASE = "."
 DEFAULT_DIR_CACHE = "cache"
 DEFAULT_DIR_WORDLIST = "wordlists"
+DEFAULT_FILE_EXCLUDE = "exclude.txt"
+DEFAULT_FILE_INCLUDE = "include.txt"
 DEFAULT_FILE_OUTPUT = "index.csv"
 DEFAULT_OCR_DPI = 300
 DEFAULT_OCR_CONFIDENCE = 40
-DEFAULT_STRIP_MAX_WORDS = 10
+DEFAULT_OCR_MARGIN_BOTTOM = 5
+DEFAULT_OCR_MARGIN_TOP = 0
+DEFAULT_OCR_SKIP_PAGES = 2
+DEFAULT_STRIP_MAX_WORDS = 20
 DEFAULT_STRIP_MIN_WORDS = 3
-DEFAULT_STRIP_THRESHOLD = 0.5
+DEFAULT_STRIP_THRESHOLD = 50
 DEFAULT_TERM_OCCURRENCES = 2
 DEFAULT_TERM_ZIPF = 3.6
 
@@ -39,17 +49,9 @@ DEFAULT_TERM_ZIPF = 3.6
 
 
 RE_ACR = re.compile(r"\b[A-Z]{2,6}\b")
-
 RE_TERM_ACR = re.compile(r"^(.*\S)\s\(([A-Za-z0-9]{2,8})\)$")
-
-RE_TERM_ACR_FIRST = re.compile(
-    r"\b([A-Z]{2,8})\s\((?!e\.g\.|i\.e\.)((?:[A-Z][a-zA-Z0-9\-]*\s){1,5}[A-Z][a-zA-Z0-9\-]*)\)"
-)
-
-RE_TERM_ACR_LAST = re.compile(
-    r"\b((?:[A-Z][a-zA-Z0-9\-]*\s){1,5}[A-Z][a-zA-Z0-9\-]*)\s\(([A-Z]{2,8})\)"
-)
-
+RE_TERM_ACR_FIRST = re.compile(r"\b([A-Z]{2,8})\s\((?!e\.g\.|i\.e\.)((?:[A-Z][a-zA-Z0-9\-]*\s){1,5}[A-Z][a-zA-Z0-9\-]*)\)")
+RE_TERM_ACR_LAST = re.compile(r"\b((?:[A-Z][a-zA-Z0-9\-]*\s){1,5}[A-Z][a-zA-Z0-9\-]*)\s\(([A-Z]{2,8})\)")
 RE_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9\-]*|[.,;:!?()]")
 
 
@@ -246,39 +248,21 @@ WORDLIST_FILES = {
 # -----------------------------------------------------------------------------
 
 
-def log_msg(name, msg):
+def log_msg(name: str, msg: str) -> None:
     print(f"[{name}] {msg}", file=sys.stderr)
 
 
-def iterate_pages(iterable, desc):
-    return enumerate(
-        tqdm(
-            iterable,
-            desc=desc,
-            unit="page",
-            file=sys.stderr,
-        ),
-        start=1,
-    )
+def iterate_pages(iterable: Iterable[Any], desc: str | None = None) -> enumerate:
+    return enumerate(tqdm(iterable=iterable, desc=desc, unit="page", file=sys.stderr), start=1)
 
 
-def search_term_variants(term):
+def search_term_variants(term: str) -> str | tuple[str, str]:
     matches = RE_TERM_ACR.match(term.strip())
     if matches:
-        full, acr = matches.group(1).strip(), matches.group(2).strip()
-        return [full, acr]
-    return [term.strip()]
-
-
-def build_index(term_index, book, min_occurrences=2):
-    rows = []
-    for term, page_nums in term_index.items():
-        if len(page_nums) >= min_occurrences:
-            index = " ".join(str(p) for p in sorted(page_nums))
-            rows.append((term, book, index))
-
-    log_msg("build_index", f"Built index with {len(rows)} terms")
-    return rows
+        full = matches.group(1)
+        acr = matches.group(2)
+        return (full.strip(), acr.strip())
+    return term.strip()
 
 
 # -----------------------------------------------------------------------------
@@ -286,47 +270,38 @@ def build_index(term_index, book, min_occurrences=2):
 # -----------------------------------------------------------------------------
 
 
-def read_terms_file(path):
+def read_terms_file(path: str) -> list[str]:
     with open(path, "r", encoding="utf-8") as f:
         return [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
 
 
-def load_exclude_set(path):
-    excluded = read_terms_file(path)
+def load_term_set(path: str) -> set[str]:
+    if not path:
+        return None
 
-    variants = set()
-    for term in excluded:
-        for variant in search_term_variants(term):
-            variants.add(variant.lower())
-    excluded += variants
+    term_list = read_terms_file(path)
 
-    log_msg(
-        "load_exclude_set",
-        f"Loaded {len(excluded)} excluded term(s) from '{path}'",
-    )
-    return excluded
+    term_set = set[str | tuple[str, str]]()
+    for term in term_list:
+        term_set.add(search_term_variants(term))
+
+    return term_set
 
 
-def load_wordlists(wordlist):
-    words = defaultdict(list)
+def load_wordlists(path: str) -> defaultdict[str, list[str]]:
+    words = defaultdict[str, list[str]](list[str])
     for key, (filename, default, uppercase) in WORDLIST_FILES.items():
-        path = os.path.join(wordlist, filename)
+        path = os.path.join(path, filename)
         if os.path.exists(path):
             words[key] = read_terms_file(path)
             if uppercase:
                 words[key] = [w.upper() for w in words[key]]
             else:
                 words[key] = [w.lower() for w in words[key]]
-            log_msg(
-                "load_wordlists",
-                f"Loaded {len(words[key])} entries from '{path}'",
-            )
+            log_msg("load_wordlists", f"Loaded {len(words[key])} entries from '{path}'")
         else:
             words[key] = default
-            log_msg(
-                "load_wordlists",
-                f"Path '{path}' does not exist. Using default wordlist",
-            )
+            log_msg("load_wordlists", f"Path '{path}' does not exist. Using default wordlist")
     return words
 
 
@@ -335,114 +310,72 @@ def load_wordlists(wordlist):
 # -----------------------------------------------------------------------------
 
 
-def get_ocr_cache(path, dir, confidence, dpi):
-    file_name = os.path.basename(path)
+def get_ocr_cache(pdf_path: str, dir: str, confidence: int, dpi: int) -> str:
+    if not dir:
+        return None
+
+    file_name = os.path.basename(pdf_path)
     cache_name = os.path.splitext(file_name)
-    if not cache_name[1]:
-        log_msg(
-            "get_ocr_cache",
-            "WARNING: PDF path has no extension! This will cause another file "
-            "with the same name with an extension to use the same cached file",
-        )
     return str(os.path.join(dir, f"{cache_name[0]}-{confidence}-{dpi}.json"))
 
 
-def load_ocr_cache(path):
+def load_ocr_cache(path: str) -> list[tuple[int, Any]]:
+    if not path or not os.path.exists(path):
+        return None
+
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     return [(int(p), t) for p, t in raw]
 
 
-def save_ocr_cache(path, pages):
+def save_ocr_cache(path: str, data: Any) -> None:
+    if not path:
+        return
+
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(pages, f)
+        json.dump(data, f)
 
 
-def render_pages(path, dpi, password=None):
-    doc = pymupdf.open(path)
+def get_crop_rect(page: pymupdf.Page, margin_bottom: float, margin_top: float) -> pymupdf.Rect:
+    rect: pymupdf.Rect = page.rect
+    top = rect.y0 + (rect.height * margin_top)
+    bottom = rect.y1 - (rect.height * margin_bottom)
+    return pymupdf.Rect(rect.x0, top, rect.x1, bottom)
+
+
+def render_pdf_image(path: str, dpi: int, margin_bottom: int = 0, margin_top: int = 0, password: str = "", skip: int = 0) -> list[ImageFile]:
+    doc = pymupdf.Document(path)
     if doc.needs_pass and (not password or not doc.authenticate(password)):
-        raise ValueError(
-            "PDF is password-protected and the supplied password did not work or not provided."
-        )
+        raise ValueError("PDF is password-protected and the supplied password did not work or not provided.")
 
-    images = []
-    for i, page in iterate_pages(doc, "Rendering pages"):
-        pix = page.get_pixmap(dpi=dpi)
+    images = list[ImageFile]()
+    for i, page in iterate_pages(doc, f"Rendering pages at {dpi} DPI"):
+        if i < skip:
+            continue
+
+        crop_rect = get_crop_rect(page, margin_bottom / 100, margin_top / 100)
+        pix = page.get_pixmap(dpi=dpi, clip=crop_rect)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
         images.append(img)
 
-    doc.close()
     return images
 
 
-def ocr_pages(path, confidence, dpi, password=None):
-    log_msg(
-        "ocr_pages",
-        f"Rendering pages at {dpi} DPI ...",
-    )
-
-    images = render_pages(path, dpi, password)
-    log_msg(
-        "ocr_pages",
-        f"{len(images)} pages rendered. Running OCR with {confidence}% confidence (time-intensive) ...",
-    )
-
-    pages = []
+def ocr_images(images: list[ImageFile], confidence: float) -> list[tuple[int, str]]:
+    page_blobs = list[tuple[int, str]]()
     for i, img in iterate_pages(images, "OCR"):
-        data = pytesseract.image_to_data(
-            img,
-            lang="eng",
-            output_type=pytesseract.Output.DICT,
-        )
-        words = []
-        for word, ocr_conf in zip(data["text"], data["conf"]):
-            word = word.strip()
-            if not word:
+        data = pytesseract.image_to_data(img, lang="eng", output_type=pytesseract.Output.DICT)
+        word_blob = list[str]()
+        for word, ocr_confidence in zip(data["text"], data["conf"]):
+            word = str(word).strip()
+            if not word or ocr_confidence < confidence:
                 continue
 
-            try:
-                confidence = float(confidence)
-            except (TypeError, ValueError):
-                confidence = -1
-            if ocr_conf < confidence:
-                continue
+            word_blob.append(word)
 
-            words.append(word)
+        page_blobs.append((i, " ".join(word_blob)))
 
-        pages.append((i, " ".join(words)))
-
-    return pages
-
-
-def get_pages(path, cache_dir, confidence, dpi, password=None):
-    if cache_dir and os.path.exists(cache_dir):
-        cache_path = get_ocr_cache(path, cache_dir, confidence, dpi)
-        if os.path.exists(cache_path):
-            log_msg(
-                "get_pages", f"Loading cached OCR text from '{cache_path}' ..."
-            )
-            return load_ocr_cache(cache_path)
-    else:
-        log_msg("get_pages", "No cache found or wanted")
-
-    pages = ocr_pages(
-        path,
-        confidence=confidence,
-        dpi=dpi,
-        password=password,
-    )
-
-    if cache_dir:
-        if not os.path.exists(cache_dir):
-            os.mkdir(cache_dir)
-            log_msg("get_pages", f"Created '{cache_dir}' directory")
-        cache_path = get_ocr_cache(path, cache_dir, confidence, dpi)
-        save_ocr_cache(cache_path, pages)
-        log_msg("get_pages", f"Cached OCR text to '{cache_path}'")
-    else:
-        log_msg("get_pages", "Skipping saving to cache")
-
-    return pages
+    return page_blobs
 
 
 # -----------------------------------------------------------------------------
@@ -450,11 +383,11 @@ def get_pages(path, cache_dir, confidence, dpi, password=None):
 # -----------------------------------------------------------------------------
 
 
-def strip_repeating_lines(pages, max_len, min_len, threshold):
-    tokenized = [(page_num, text.split()) for page_num, text in pages]
-    cutoff = max(2, int(len(pages) * threshold))
+def strip_repeating_lines(page_blobs: list[tuple[int, str]], max_len: int, min_len: int, threshold: float) -> list[tuple[int, list[str]]]:
+    tokenized = [(page_num, text.split()) for page_num, text in page_blobs]
+    cutoff = max(2, int(len(page_blobs) * threshold))
 
-    def ngrams(words, n):
+    def ngrams(words: list[str], n: int) -> list[tuple[str, ...]]:
         return [tuple(words[i : i + n]) for i in range(len(words) - n + 1)]
 
     repeating_by_len = {}
@@ -464,18 +397,15 @@ def strip_repeating_lines(pages, max_len, min_len, threshold):
             counts.update(set(ngrams(words, i)))  # count once per page
         repeating_by_len[i] = {g for g, c in counts.items() if c >= cutoff}
 
-    result = []
+    result = list[tuple[int, list[str]]]()
     repeating_display = set()
     for page_num, words in tokenized:
-        kept = []
+        kept = list[str]()
         i = 0
         while i < len(words):
             matched_len = None
             for n in range(max_len, min_len - 1, -1):
-                if (
-                    i + n <= len(words)
-                    and tuple(words[i : i + n]) in repeating_by_len[n]
-                ):
+                if i + n <= len(words) and tuple(words[i : i + n]) in repeating_by_len[n]:
                     matched_len = n
                     break
             if matched_len:
@@ -486,10 +416,7 @@ def strip_repeating_lines(pages, max_len, min_len, threshold):
                 i += 1
         result.append((page_num, [" ".join(kept)]))
 
-    log_msg(
-        "strip_repeating_lines",
-        f"Stripped {len(repeating_display)} repeating header/footer word-sequence(s)",
-    )
+    log_msg("strip_repeating_lines", f"Stripped {len(repeating_display)} repeating header/footer word-sequence(s)")
 
     return result
 
@@ -499,22 +426,22 @@ def strip_repeating_lines(pages, max_len, min_len, threshold):
 # -----------------------------------------------------------------------------
 
 
-def find_acronym_definitions(pages):
-    votes = defaultdict(Counter)
-    for page_num, lines in pages:
+def find_acronym_definitions(page_blobs: list[tuple[int, str]]) -> defaultdict[str, str]:
+    votes = defaultdict[str, Counter](Counter)
+    for page_num, lines in page_blobs:
         text = "\n".join(lines)
         for matches in RE_TERM_ACR_LAST.finditer(text):
-            full, acr = matches.group(1).strip(), matches.group(2)
+            full, acr = matches.group(1).strip(), matches.group(2).strip()
             votes[acr][full] += 1
         for matches in RE_TERM_ACR_FIRST.finditer(text):
-            acr, full = matches.group(1), matches.group(2).strip()
+            acr, full = matches.group(1).strip(), matches.group(2).strip()
             votes[acr][full] += 1
     return {acr: counter.most_common(1)[0][0] for acr, counter in votes.items()}
 
 
-def build_candidate_phrases(text, connectors):
-    phrase = []
-    connector_buf = []
+def build_candidate_phrases(text: str, connectors: list[str]) -> str:
+    phrase = list[str]()
+    connector_buf = list[str]()
 
     def flush():
         if phrase:
@@ -539,28 +466,33 @@ def build_candidate_phrases(text, connectors):
     yield from flush()
 
 
-def is_forbidden_start(phrase, forbidden_starters):
+def is_forbidden_start(phrase: str, forbidden_starters: list[str]) -> bool:
     first_word = phrase.split()[0].lower().strip(".,;:!?()")
     return first_word in forbidden_starters
 
 
-def is_common_english_word(term, max_zipf):
+def is_common_english_word(term: str, zipf: float) -> bool:
     if " " in term or "-" in term or any(c.isdigit() for c in term):
         return False
-    return zipf_frequency(term.lower(), "en") > max_zipf
+    return zipf_frequency(term.lower(), "en") > zipf
 
 
-def extract_terms(pages, wordlists, zipf, exclude_set=None):
+def extract_terms(
+    page_blobs: list[tuple[int, str]],
+    wordlists: defaultdict[str, list[str]],
+    zipf: float,
+    exclude_set: set[str] | None = None,
+) -> defaultdict[str, set[int]]:
     exclude_set = exclude_set or set()
     connectors = wordlists["connectors"]
     forbidden_starters = wordlists["forbidden_starters"]
     stopwords = wordlists["stopwords"]
 
-    acronym_map = find_acronym_definitions(pages)
+    acronym_map = find_acronym_definitions(page_blobs)
     full_to_acr = {full.lower(): acr for acr, full in acronym_map.items()}
 
-    term_index = defaultdict(set)
-    for page_num, lines in pages:
+    term_index = defaultdict[str, set[int]](set)
+    for page_num, lines in page_blobs:
         text = "\n".join(lines)
 
         for matches in RE_ACR.finditer(text):
@@ -573,17 +505,28 @@ def extract_terms(pages, wordlists, zipf, exclude_set=None):
         for phrase in build_candidate_phrases(text, connectors):
             if phrase.lower() in exclude_set:
                 continue
-            if is_forbidden_start(phrase, forbidden_starters):
-                continue
             if len(phrase) < 2 or phrase.upper() in stopwords:
                 continue
             if is_common_english_word(phrase, zipf):
+                continue
+            if is_forbidden_start(phrase, forbidden_starters):
                 continue
             acr = full_to_acr.get(phrase.lower())
             term = f"{acronym_map[acr]} ({acr})" if acr else phrase
             term_index[term].add(page_num)
 
     return term_index
+
+
+def build_index(term_index: defaultdict[str, set[str]], book: int, min_occurrences: int) -> list[tuple[str, int, int]]:
+    rows = list[tuple[str, int, int]]()
+    for term, page_nums in term_index.items():
+        if len(page_nums) >= min_occurrences:
+            index: str = " ".join(str(p) for p in sorted(page_nums))
+            rows.append((term, book, index))
+
+    log_msg("build_index", f"Built index with {len(rows)} terms")
+    return rows
 
 
 # -----------------------------------------------------------------------------
@@ -600,6 +543,7 @@ def main():
     )
     ap.add_argument(
         "book",
+        # default=1,
         help="Book number in course book series (e.g. SEC565.1 is book number 1, and SEC565.4 is book number 4)",
         type=int,
     )
@@ -621,8 +565,7 @@ def main():
         "--confidence",
         default=DEFAULT_OCR_CONFIDENCE,
         dest="confidence",
-        help="Drop OCR words below this confidence 0-100. "
-        "Adjust to not detect watermarks or if your output is jumbled.",
+        help="Drop OCR words below this confidence 0-100. Adjust to not detect watermarks or if your output is jumbled.",
         type=float,
     )
     ap.add_argument(
@@ -642,10 +585,35 @@ def main():
         "Applied in both 'build' and 'list' modes.",
     )
     ap.add_argument(
+        "-i",
+        "--include-terms",
+        dest="include",
+        help="Path to a file of terms/phrases to always exclude (one term / line), "
+        "include generic boilerplate or other garbage not needed ever."
+        "Applied in both 'build' and 'list' modes.",
+    )
+    ap.add_argument(
         "--no-cache",
         action="store_true",
         dest="no_cache",
         help="Ignore cache option flags and force OCR text extraction",
+    )
+    ap.add_argument(
+        "--margin-bottom",
+        default=DEFAULT_OCR_MARGIN_BOTTOM,
+        dest="margin_bottom",
+        help="Fraction of page height to crop from the bottom before OCR "
+        "(e.g. '8' crops the bottom 8%%). Excludes footer/watermark text "
+        "by position instead of by content, so it works even when OCR "
+        "reads that text differently from page to page.",
+        type=float,
+    )
+    ap.add_argument(
+        "--margin-top",
+        default=DEFAULT_OCR_MARGIN_TOP,
+        dest="margin_top",
+        help="Fraction of page height to crop from the top before OCR (e.g. '8' crops the top 8%%).",
+        type=float,
     )
     ap.add_argument(
         "--max-words",
@@ -700,8 +668,7 @@ def main():
         "--wordlist",
         default=DEFAULT_DIR_WORDLIST,
         dest="wordlist",
-        help="Directory containing wordlist text files (one term / line). "
-        "connectors.txt / forbidden_starters.txt / stopwords.txt",
+        help="Directory containing wordlist text files (one term / line). connectors.txt / forbidden_starters.txt / stopwords.txt",
     )
     ap.add_argument(
         "-z",
@@ -713,48 +680,59 @@ def main():
         "Lower = stricter (drops more borderline words), higher = more permissive.",
         type=float,
     )
-
     args = ap.parse_args()
 
     if args.no_cache:
         args.cache = None
+        log_msg("main", "Forcing no cache")
 
     if not args.password:
         args.password = os.environ.get("PDF_PASSWORD")
         if not args.password:
             log_msg("main", "No password provided")
 
-    if args.exclude:
-        exclude_set = load_exclude_set(args.exclude)
-    else:
-        exclude_set = set()
-
+    cache_path = get_ocr_cache(args.path, args.cache, args.confidence, args.dpi)
     wordlists = load_wordlists(args.wordlist)
+    exclude = load_term_set(args.exclude)
+    include = load_term_set(args.include)
+    page_blobs = load_ocr_cache(cache_path)
 
     try:
-        pages = get_pages(
-            cache_dir=args.cache,
-            confidence=args.confidence,
-            dpi=args.dpi,
-            password=args.password,
-            path=args.path,
-        )
+        if page_blobs == None:
+            images = render_pdf_image(
+                args.path,
+                args.dpi,
+                margin_bottom=args.margin_bottom,
+                margin_top=args.margin_top,
+                password=args.password,
+            )
+            page_blobs = ocr_images(images, args.confidence)
     except (OSError, ValueError) as e:
         log_msg("main", f"ERROR: {e}")
         sys.exit(1)
 
-    pages_cleaned = strip_repeating_lines(
+    if args.cache:
+        if not os.path.exists(args.cache):
+            os.mkdir(args.cache)
+            log_msg("main", f"Created '{args.cache}' directory")
+        save_ocr_cache(cache_path, page_blobs)
+        log_msg("main", f"Cached OCR text to '{cache_path}'")
+    else:
+        log_msg("main", "Skipping saving to cache")
+
+    page_blobs = strip_repeating_lines(
+        page_blobs=page_blobs,
         max_len=args.max_words,
         min_len=args.min_words,
-        pages=pages,
         threshold=args.threshold,
     )
 
     terms_index = extract_terms(
-        exclude_set=exclude_set,
-        pages=pages_cleaned,
+        page_blobs=page_blobs,
         wordlists=wordlists,
         zipf=args.zipf,
+        exclude_set=exclude,
+        # include_set=include,
     )
 
     rows = build_index(terms_index, args.book, args.occurrences)
